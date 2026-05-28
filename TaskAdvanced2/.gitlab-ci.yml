@@ -1,0 +1,67 @@
+stages:
+  - validate
+  - plan
+  - apply
+
+default:
+  image:
+    name: hashicorp/terraform:1.9
+    entrypoint: [""]
+
+variables:
+  TF_ROOT: "${CI_PROJECT_DIR}/envs/dev"
+  TF_IN_AUTOMATION: "true"
+
+# Секреты задаются в GitLab → Settings → CI/CD → Variables:
+#   YC_SA_KEY_JSON        — тип File, JSON авторизованного ключа сервисного аккаунта (бессрочный)
+#   YC_CLOUD_ID           — masked, ID облака
+#   YC_FOLDER_ID          — masked, ID каталога
+#   AWS_ACCESS_KEY_ID     — masked, статический ключ для Object Storage (backend)
+#   AWS_SECRET_ACCESS_KEY — masked, секрет статического ключа
+
+.terraform_base:
+  before_script:
+    - cd "${TF_ROOT}"
+    # YC_SA_KEY_JSON — File variable, GitLab кладёт содержимое в файл и передаёт путь
+    - export YC_SERVICE_ACCOUNT_KEY_FILE="${YC_SA_KEY_JSON}"
+    - terraform init
+        -input=false
+        -backend-config="access_key=${AWS_ACCESS_KEY_ID}"
+        -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY}"
+
+validate:
+  extends: .terraform_base
+  stage: validate
+  script:
+    - terraform validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+plan:
+  extends: .terraform_base
+  stage: plan
+  script:
+    - terraform plan -input=false -out=tfplan
+    - terraform show -no-color tfplan > tfplan.txt
+  artifacts:
+    name: tfplan-${CI_COMMIT_SHORT_SHA}
+    paths:
+      - "${TF_ROOT}/tfplan"
+      - "${TF_ROOT}/tfplan.txt"
+    expire_in: 1 week
+    expose_as: "Terraform Plan"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+apply:
+  extends: .terraform_base
+  stage: apply
+  script:
+    - terraform apply -input=false tfplan
+  dependencies:
+    - plan
+  when: manual
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

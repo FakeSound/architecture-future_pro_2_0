@@ -1,0 +1,107 @@
+@startuml EventStorming
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_TOP_DOWN()
+
+title Будущее 2.0 — Event Storming: события, источники, подписчики
+
+' ─── Медицинский домен ────────────────────────────────────────────────────────
+Container_Boundary(ClinicalDomain, "Медицинский домен [источник]") {
+    Container(E_PR,   "patient.registered",     "Event", "Пациент зарегистрирован в системе")
+    Container(E_AC,   "appointment.created",    "Event", "Создан визит к врачу")
+    Container(E_ACMP, "appointment.completed",  "Event", "Визит завершён, результат зафиксирован")
+    Container(E_SO,   "study.ordered",          "Event", "Назначено медицинское исследование")
+    Container(E_SC,   "study.completed",        "Event", "Результаты исследования готовы")
+    Container(E_DA,   "diagnosis.added",        "Event", "Диагноз добавлен в медкарту врачом")
+}
+
+' ─── Финтех-домен ─────────────────────────────────────────────────────────────
+Container_Boundary(FintechDomain, "Финтех-домен [источник]") {
+    Container(E_AO, "account.opened",    "Event", "Открыт счёт пациента")
+    Container(E_PC, "payment.completed", "Event", "Платёж успешно проведён")
+    Container(E_PF, "payment.failed",    "Event", "Платёж отклонён или отменён")
+    Container(E_CA, "credit.approved",   "Event", "Кредитный договор одобрен")
+}
+
+' ─── Операционный домен ───────────────────────────────────────────────────────
+Container_Boundary(OpsDomain, "Операционный домен [источник]") {
+    Container(E_CLA, "clinic.activated",          "Event", "Клиника активирована и принимает пациентов")
+    Container(E_SA,  "staff.assigned",            "Event", "Сотрудник назначен в клинику / на смену")
+    Container(E_SU,  "staff.unassigned",          "Event", "Сотрудник снят с расписания")
+    Container(E_ITR, "inventory.threshold.reached","Event","Остаток инвентаря опустился ниже порога")
+}
+
+' ─── Фармацевтический домен ───────────────────────────────────────────────────
+Container_Boundary(PharmaDomain, "Фармацевтический домен [источник]") {
+    Container(E_PI,  "prescription.issued", "Event", "Рецепт выписан пациенту")
+    Container(E_SR,  "supply.received",     "Event", "Партия препаратов поступила на склад")
+    Container(E_SLO, "stock.low",           "Event", "Остаток препарата ниже минимального уровня")
+}
+
+' ─── ИИ-сервисы ───────────────────────────────────────────────────────────────
+Container_Boundary(AIDomain, "ИИ-сервисы [источник]") {
+    Container(E_DC, "diagnosis.completed", "Event", "AI-диагностика завершена, результат получен")
+    Container(E_DF, "diagnosis.failed",    "Event", "AI-диагностика не выполнена (ошибка модели)")
+}
+
+' ─── Платформа данных ─────────────────────────────────────────────────────────
+Container_Boundary(DataPlatform, "Платформа данных [подписчик всех событий]") {
+    Container(DP, "Data Lakehouse", "Kafka Connect / Flink / Delta Lake", "[Conformist] Потребляет все события для аналитики и отчётности")
+}
+
+' ─── Подписки: patient.registered ────────────────────────────────────────────
+Rel(E_PR, E_AO, "→ открыть счёт")
+Rel(E_PR, DP,   "→ DataLake")
+
+' ─── Подписки: appointment.created ───────────────────────────────────────────
+Rel(E_AC, DP, "→ DataLake")
+
+' ─── Подписки: appointment.completed ─────────────────────────────────────────
+Rel(E_ACMP, E_PC,  "→ инициировать оплату")
+Rel(E_ACMP, E_PI,  "→ контекст рецепта")
+Rel(E_ACMP, DP,    "→ DataLake")
+
+' ─── Подписки: study.ordered / study.completed ───────────────────────────────
+Rel(E_SO, DP, "→ DataLake")
+Rel(E_SC, DP, "→ DataLake")
+
+' ─── Подписки: diagnosis.added ───────────────────────────────────────────────
+Rel(E_DA, DP, "→ DataLake")
+
+' ─── Подписки: study.completed → AI ─────────────────────────────────────────
+Rel(E_SC, E_DC, "[Conformist] → запустить диагностику")
+
+' ─── Подписки: payment.completed / failed ────────────────────────────────────
+Rel(E_PC, E_ACMP, "[C/S] → разблокировать услугу")
+Rel(E_PC, DP,     "→ DataLake")
+Rel(E_PF, DP,     "→ DataLake")
+
+' ─── Подписки: credit.approved ───────────────────────────────────────────────
+Rel(E_CA, E_ACMP, "[C/S] → разрешить кредитный приём")
+Rel(E_CA, DP,     "→ DataLake")
+
+' ─── Подписки: account.opened ────────────────────────────────────────────────
+Rel(E_AO, DP, "→ DataLake")
+
+' ─── Подписки: clinic / staff ────────────────────────────────────────────────
+Rel(E_CLA, E_AC, "[C/S] → клиника доступна для расписания")
+Rel(E_CLA, DP,   "→ DataLake")
+Rel(E_SA,  E_AC, "[C/S] → врач доступен")
+Rel(E_SA,  DP,   "→ DataLake")
+Rel(E_SU,  E_AC, "[C/S] → врач недоступен")
+Rel(E_SU,  DP,   "→ DataLake")
+Rel(E_ITR, DP,   "→ DataLake")
+
+' ─── Подписки: pharma ────────────────────────────────────────────────────────
+Rel(E_PI,  DP,    "→ DataLake")
+Rel(E_SR,  DP,    "→ DataLake")
+Rel(E_SLO, E_ITR, "[C/S] → пополнить инвентарь")
+Rel(E_SLO, DP,    "→ DataLake")
+
+' ─── Подписки: diagnosis ─────────────────────────────────────────────────────
+Rel(E_DC, E_DA, "[C/S] → прикрепить к медкарте")
+Rel(E_DC, DP,   "→ DataLake")
+Rel(E_DF, DP,   "→ DataLake")
+
+SHOW_LEGEND()
+@enduml

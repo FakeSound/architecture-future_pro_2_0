@@ -1,0 +1,150 @@
+@startuml C4_Containers_Future2
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_TOP_DOWN()
+
+title Будущее 2.0 — Целевая архитектура (горизонт 3 года)\nC4 Container Diagram
+
+' ─── Пользователи ────────────────────────────────────────────────────────────
+Person(Operator, "Оператор клиники", "Врач / оператор,\nработает с пациентами и клиниками")
+Person(Analyst, "Бизнес-пользователь / аналитик", "Строит отчёты и анализирует показатели")
+
+' ─── Внешние системы ─────────────────────────────────────────────────────────
+System_Ext(ExternalBank, "Внешние финтех-партнёры", "Банки и платёжные провайдеры")
+System_Ext(Regulators, "Регуляторы", "ЦБ РФ, Росздравнадзор, ФНС")
+
+' ─── Система ─────────────────────────────────────────────────────────────────
+System_Boundary(Future2, "Будущее 2.0 — Cloud Platform") {
+
+    ' UI-слой
+    Container(OperatorUI, "Клиентский интерфейс оператора", "Web / Desktop UI", "Регистрация пациентов, приёмы, назначения исследований, операции в клиниках")
+
+    ' Сквозная инфраструктура
+    Container(api_gateway, "API Gateway", "Kong", "Единая точка входа. Аутентификация, rate limiting, маршрутизация ко всем доменным API")
+    Container(iam, "IAM", "Keycloak", "SSO и управление доступом для всех доменов и пользователей")
+
+    ' ─── Медицинский домен ───────────────────────────────────────────────────
+    Container_Boundary(ClinicalDomain, "Медицинский домен") {
+        Container(ClinicalAPI, "Clinical Services API", "Python / FastAPI", "Управление пациентами, медкартами, расписанием, визитами. Публикует медицинские события")
+        ContainerDb(ClinicalDB, "Clinical DB", "PostgreSQL", "Операционные данные по пациентам, визитам, назначениям")
+        Container(StudiesStorage, "Medical Studies Storage", "Object Storage / PACS", "Хранение снимков и сырых результатов исследований. Не используется напрямую для BI")
+    }
+
+    ' ─── ИИ-сервисы ─────────────────────────────────────────────────────────
+    Container_Boundary(AIDomain, "ИИ-сервисы") {
+        Container(AIServices, "AI Services", "Python / ML", "AI-диагностика, анализ медицинских снимков и исследований, вспомогательные заключения")
+    }
+
+    ' ─── Финтех-домен ───────────────────────────────────────────────────────
+    Container_Boundary(FintechDomain, "Финтех-домен") {
+        Container(FintechAPI, "Fintech Services API", "Go + Java", "Кредиты, платежи, счета, скоринг. Публикует финансовые события")
+        ContainerDb(FintechDB, "Fintech DB", "PostgreSQL", "Транзакции, кредитные договоры, счета")
+    }
+
+    ' ─── Операционный домен ─────────────────────────────────────────────────
+    Container_Boundary(OpsDomain, "Операционный домен") {
+        Container(OpsAPI, "Operations Services API", "Go", "Управление клиниками, персоналом, инвентарём, внутренней отчётностью")
+        ContainerDb(OpsDB, "Operations DB", "PostgreSQL", "Оргструктура, персонал, инвентарь, планирование")
+    }
+
+    ' ─── Фармацевтический домен ─────────────────────────────────────────────
+    Container_Boundary(PharmaDomain, "Фармацевтический домен") {
+        Container(PharmaAPI, "Pharma Services API", "Go / Python", "Управление аптечными сетями, закупками, остатками лекарств и рецептами. Публикует фармацевтические события")
+        ContainerDb(PharmaDB, "Pharma DB", "PostgreSQL", "Операционные данные по поставкам, медикаментам, рецептам и продажам")
+    }
+
+    ' ─── Внутренние операции ────────────────────────────────────────────────
+    Container_Boundary(BackOfficeDomain, "Внутренние операции") {
+        Container(BackOffice, "Back-office Service", "TBD", "Обработка финансовых данных, управленческая отчётность по клиникам. Подписан на события доменов")
+        ContainerDb(BackOfficeDB, "Back-office DB", "PostgreSQL", "Агрегированные операционные данные для внутренних процессов")
+    }
+
+    ' ─── Событийная платформа ───────────────────────────────────────────────
+    Container_Boundary(EventPlatform, "Событийная платформа") {
+        ContainerQueue(EventBus, "Event Bus", "Apache Kafka", "Центральная событийная шина. Домены взаимодействуют только через топики: patient-events, billing-events, pharma-events и др.")
+        ContainerDb(SchemaRegistry, "Schema Registry", "Confluent Schema Registry", "Схемы и контракты событий. Продюсеры валидируют события перед публикацией")
+        ContainerQueue(DLQ, "DLQ / Parking Lot", "Kafka Topics", "Топики для сообщений с ошибками доставки и повторной обработки")
+    }
+
+    ' ─── Платформа данных ───────────────────────────────────────────────────
+    Container_Boundary(DataPlatform, "Платформа данных и аналитики") {
+        Container(Ingestion, "Data Ingestion Layer", "Kafka Connect / Debezium", "CDC из операционных БД + batch-загрузка. Единая точка приёма данных в озеро")
+        Container(StreamProc, "Stream Processing", "Apache Flink", "Near-real-time обработка событий. Формирует потоковые витрины и агрегаты")
+        ContainerDb(DataLake, "Data Lakehouse", "Delta Lake / Apache Iceberg", "Единое аналитическое хранилище (raw + curated слои). Разбито по доменным namespace: raw/clinical/, raw/fintech/, raw/ops/, raw/pharma/ — с ACL на уровне хранилища. Заменяет MS SQL Server 2008 DWH")
+        ContainerDb(DomainDataProducts, "Domain Data Products", "Analytical DB / Data Marts", "Доменные витрины данных как продукты: с владельцами, SLA и документацией. Запись разрешена только сервисам домена-владельца")
+        Container(DataCatalog, "Data Catalog", "DataHub", "Метаданные data products, data lineage, классификация, управление доступом")
+        Container(DataAccess, "Data API / Access Layer", "API Gateway + OPA", "Единая точка доступа к витринам. Валидирует JWT через Keycloak, проверяет права и маршрутизирует запросы")
+        Container(DataPortal, "Портал самообслуживания", "Apache Superset + React", "Каталог data products, constructor отчётов, доступ по ролям. Заменяет PowerBuilder UI и Power BI")
+    }
+
+    ' ─── Легаси-слой (временный) ────────────────────────────────────────────
+    Container_Boundary(LegacyZone, "Легаси-слой (этап миграции, до 18 мес.)") {
+        ContainerDb(LegacyDWH, "Legacy DWH", "MS SQL Server 2008", "Исторические данные. Выводится из эксплуатации по завершении миграции в DataLake")
+        Container(LegacyESB, "Legacy ESB + ACL", "Apache Camel", "Старая шина синхронных интеграций. Анти-коррупционный слой транслирует legacy-сообщения в события Kafka")
+    }
+}
+
+' ─── Связи: пользователи ─────────────────────────────────────────────────────
+Rel(Operator, OperatorUI, "Работает через")
+Rel(Analyst, DataPortal, "Строит отчёты и витрины данных")
+
+' ─── Связи: внешние системы ──────────────────────────────────────────────────
+Rel(ExternalBank, api_gateway, "Финтех-интеграции", "Secure API / HTTPS")
+
+' ─── Связи: UI → Gateway ─────────────────────────────────────────────────────
+Rel(OperatorUI, api_gateway, "API-запросы", "HTTPS")
+
+' ─── Связи: API Gateway ──────────────────────────────────────────────────────
+Rel(api_gateway, iam, "Аутентификация / авторизация")
+Rel(api_gateway, ClinicalAPI, "Медицинские операции", "HTTPS")
+Rel(api_gateway, FintechAPI, "Финансовые операции", "HTTPS")
+Rel(api_gateway, OpsAPI, "Операционные функции", "HTTPS")
+Rel(api_gateway, PharmaAPI, "Фармацевтические операции", "HTTPS")
+Rel(api_gateway, Regulators, "Регуляторная отчётность", "HTTPS")
+
+' ─── Связи: домены → БД (database-per-domain) ────────────────────────────────
+Rel(ClinicalAPI, ClinicalDB, "Чтение / запись", "SQL")
+Rel(FintechAPI, FintechDB, "Чтение / запись", "SQL")
+Rel(OpsAPI, OpsDB, "Чтение / запись", "SQL")
+Rel(PharmaAPI, PharmaDB, "Чтение / запись", "SQL")
+Rel(BackOffice, BackOfficeDB, "Чтение / запись", "SQL")
+
+' ─── Связи: домены → SchemaRegistry (валидация контракта перед публикацией) ──
+Rel(ClinicalAPI, SchemaRegistry, "Валидация схемы события")
+Rel(FintechAPI, SchemaRegistry, "Валидация схемы события")
+Rel(OpsAPI, SchemaRegistry, "Валидация схемы события")
+Rel(PharmaAPI, SchemaRegistry, "Валидация схемы события")
+
+' ─── Связи: домены → EventBus (публикация событий) ──────────────────────────
+Rel(ClinicalAPI, EventBus, "patient.registered\nappointment.created", "Events")
+Rel(FintechAPI, EventBus, "payment.completed\naccount.opened", "Events")
+Rel(OpsAPI, EventBus, "clinic.updated\nstaff.changed", "Events")
+Rel(PharmaAPI, EventBus, "pharma.order.created\npharma.stock.updated", "Events")
+Rel(AIServices, EventBus, "diagnosis.completed", "Events")
+
+' ─── Связи: EventBus → потребители ───────────────────────────────────────────
+Rel(EventBus, AIServices, "Обезличенные медицинские события", "Events")
+Rel(EventBus, BackOffice, "Подписан на доменные события", "Events")
+Rel(AIServices, StudiesStorage, "Читает снимки / исследования", "Secure access")
+Rel(EventBus, DLQ, "Сообщения с ошибками доставки")
+
+' ─── Связи: Платформа данных ─────────────────────────────────────────────────
+Rel(Ingestion, EventBus, "Потребляет все события", "Kafka Consumer")
+Rel(Ingestion, DataLake, "Загружает данные (raw слой)", "Batch / Stream")
+Rel(StreamProc, EventBus, "Потребляет события", "Kafka Consumer")
+Rel(StreamProc, DataLake, "Пишет потоковые агрегаты (curated слой)", "Delta / Iceberg API")
+Rel(DataLake, DomainDataProducts, "Формирование data products", "Batch / Streaming")
+Rel(DataCatalog, DataLake, "Индексирует метаданные и lineage")
+Rel(DataCatalog, DomainDataProducts, "Индексирует data products: владелец, SLA")
+Rel(DomainDataProducts, DataAccess, "Публикует витрины", "SQL / API")
+Rel(DataPortal, DataAccess, "Запросы к витринам и отчётам", "HTTPS / REST")
+Rel(DataPortal, DataCatalog, "Обнаружение data products", "API")
+Rel(DataAccess, iam, "Валидация JWT запроса", "OIDC")
+
+' ─── Связи: миграция легаси (временные, до 18 мес.) ─────────────────────────
+Rel(LegacyESB, LegacyDWH, "Читает исторические данные", "JDBC")
+Rel(LegacyDWH, DataLake, "Однократная миграция исторических данных", "ETL")
+Rel(LegacyESB, EventBus, "Транслирует legacy-сообщения в события", "ACL / Adapters")
+
+SHOW_LEGEND()
+@enduml
