@@ -47,6 +47,12 @@ System_Boundary(Future2, "Будущее 2.0 — Cloud Platform") {
         ContainerDb(OpsDB, "Operations DB", "PostgreSQL", "Оргструктура, персонал, инвентарь, планирование")
     }
 
+    ' ─── Фармацевтический домен ─────────────────────────────────────────────
+    Container_Boundary(PharmaDomain, "Фармацевтический домен") {
+        Container(PharmaAPI, "Pharma Services API", "Go / Python", "Управление аптечными сетями, закупками, остатками лекарств и рецептами. Публикует фармацевтические события")
+        ContainerDb(PharmaDB, "Pharma DB", "PostgreSQL", "Операционные данные по поставкам, медикаментам, рецептам и продажам")
+    }
+
     ' ─── Внутренние операции ────────────────────────────────────────────────
     Container_Boundary(BackOfficeDomain, "Внутренние операции") {
         Container(BackOffice, "Back-office Service", "TBD", "Обработка финансовых данных, управленческая отчётность по клиникам. Подписан на события доменов")
@@ -55,7 +61,7 @@ System_Boundary(Future2, "Будущее 2.0 — Cloud Platform") {
 
     ' ─── Событийная платформа ───────────────────────────────────────────────
     Container_Boundary(EventPlatform, "Событийная платформа") {
-        ContainerQueue(EventBus, "Event Bus", "Apache Kafka", "Центральная событийная шина. Домены взаимодействуют только через топики: patient-events, billing-events и др.")
+        ContainerQueue(EventBus, "Event Bus", "Apache Kafka", "Центральная событийная шина. Домены взаимодействуют только через топики: patient-events, billing-events, pharma-events и др.")
         ContainerDb(SchemaRegistry, "Schema Registry", "Confluent Schema Registry", "Схемы и контракты событий. Продюсеры валидируют события перед публикацией")
         ContainerQueue(DLQ, "DLQ / Parking Lot", "Kafka Topics", "Топики для сообщений с ошибками доставки и повторной обработки")
     }
@@ -64,11 +70,11 @@ System_Boundary(Future2, "Будущее 2.0 — Cloud Platform") {
     Container_Boundary(DataPlatform, "Платформа данных и аналитики") {
         Container(Ingestion, "Data Ingestion Layer", "Kafka Connect / Debezium", "CDC из операционных БД + batch-загрузка. Единая точка приёма данных в озеро")
         Container(StreamProc, "Stream Processing", "Apache Flink", "Near-real-time обработка событий. Формирует потоковые витрины и агрегаты")
-        ContainerDb(DataLake, "Data Lakehouse", "Delta Lake / Apache Iceberg", "Единое аналитическое хранилище (raw + curated слои). Разбито по доменным namespace: raw/clinical/, raw/fintech/, raw/ops/ — с ACL на уровне хранилища. Заменяет MS SQL Server 2008 DWH")
+        ContainerDb(DataLake, "Data Lakehouse", "Delta Lake / Apache Iceberg", "Единое аналитическое хранилище (raw + curated слои). Разбито по доменным namespace: raw/clinical/, raw/fintech/, raw/ops/, raw/pharma/ — с ACL на уровне хранилища. Заменяет MS SQL Server 2008 DWH")
         ContainerDb(DomainDataProducts, "Domain Data Products", "Analytical DB / Data Marts", "Доменные витрины данных как продукты: с владельцами, SLA и документацией. Запись разрешена только сервисам домена-владельца")
         Container(DataCatalog, "Data Catalog", "DataHub", "Метаданные data products, data lineage, классификация, управление доступом")
         Container(DataAccess, "Data API / Access Layer", "API Gateway + OPA", "Единая точка доступа к витринам. Валидирует JWT через Keycloak, проверяет права и маршрутизирует запросы")
-        Container(DataPortal, "Портал самообслуживания", "Apache Superset + React", "Каталог data products, конструктор отчётов, доступ по ролям. Заменяет PowerBuilder UI и Power BI")
+        Container(DataPortal, "Портал самообслуживания", "Apache Superset + React", "Каталог data products, constructor отчётов, доступ по ролям. Заменяет PowerBuilder UI и Power BI")
     }
 
     ' ─── Легаси-слой (временный) ────────────────────────────────────────────
@@ -93,23 +99,27 @@ Rel(api_gateway, iam, "Аутентификация / авторизация")
 Rel(api_gateway, ClinicalAPI, "Медицинские операции", "HTTPS")
 Rel(api_gateway, FintechAPI, "Финансовые операции", "HTTPS")
 Rel(api_gateway, OpsAPI, "Операционные функции", "HTTPS")
+Rel(api_gateway, PharmaAPI, "Фармацевтические операции", "HTTPS")
 Rel(api_gateway, Regulators, "Регуляторная отчётность", "HTTPS")
 
 ' ─── Связи: домены → БД (database-per-domain) ────────────────────────────────
 Rel(ClinicalAPI, ClinicalDB, "Чтение / запись", "SQL")
 Rel(FintechAPI, FintechDB, "Чтение / запись", "SQL")
 Rel(OpsAPI, OpsDB, "Чтение / запись", "SQL")
+Rel(PharmaAPI, PharmaDB, "Чтение / запись", "SQL")
 Rel(BackOffice, BackOfficeDB, "Чтение / запись", "SQL")
 
 ' ─── Связи: домены → SchemaRegistry (валидация контракта перед публикацией) ──
 Rel(ClinicalAPI, SchemaRegistry, "Валидация схемы события")
 Rel(FintechAPI, SchemaRegistry, "Валидация схемы события")
 Rel(OpsAPI, SchemaRegistry, "Валидация схемы события")
+Rel(PharmaAPI, SchemaRegistry, "Валидация схемы события")
 
 ' ─── Связи: домены → EventBus (публикация событий) ──────────────────────────
 Rel(ClinicalAPI, EventBus, "patient.registered\nappointment.created", "Events")
 Rel(FintechAPI, EventBus, "payment.completed\naccount.opened", "Events")
 Rel(OpsAPI, EventBus, "clinic.updated\nstaff.changed", "Events")
+Rel(PharmaAPI, EventBus, "pharma.order.created\npharma.stock.updated", "Events")
 Rel(AIServices, EventBus, "diagnosis.completed", "Events")
 
 ' ─── Связи: EventBus → потребители ───────────────────────────────────────────

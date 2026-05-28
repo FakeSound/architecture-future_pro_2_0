@@ -1,0 +1,81 @@
+@startuml BoundedContexts
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_TOP_DOWN()
+
+title Будущее 2.0 — Context Map (DDD Bounded Contexts)
+
+' ─── Core Domains ─────────────────────────────────────────────────────────────
+
+Container_Boundary(ClinicalBC, "Медицинский контекст [Core Domain]") {
+    Container(ClinPatient,     "Patient",         "Aggregate", "Персональные данные, медкарта, история болезни")
+    Container(ClinAppointment, "Appointment",     "Aggregate", "Визит: расписание, врач, статус")
+    Container(ClinStudy,       "Study",           "Aggregate", "Исследование: тип, снимки, результаты")
+    Container(ClinSvc,         "Clinical Service","Python / FastAPI\nPublished Language", "Публикует: patient.registered · appointment.completed · study.completed")
+}
+
+Container_Boundary(FintechBC, "Финтех-контекст [Core Domain]") {
+    Container(FinAccount, "Account",         "Aggregate", "Счёт: баланс, тип, владелец")
+    Container(FinCredit,  "CreditContract",  "Aggregate", "Кредит: условия, статус, график платежей")
+    Container(FinPayment, "Payment",         "Aggregate", "Платёж: сумма, источник, статус")
+    Container(FinSvc,     "Fintech Service", "Go + Java\nPublished Language", "Публикует: payment.completed · payment.failed · account.opened · credit.approved")
+}
+
+' ─── Supporting Domains ───────────────────────────────────────────────────────
+
+Container_Boundary(OpsBC, "Операционный контекст [Supporting Domain]") {
+    Container(OpsClinic,    "Clinic",       "Aggregate", "Клиника: адрес, специализации, режим работы")
+    Container(OpsStaff,     "StaffMember",  "Aggregate", "Сотрудник: роль, специализация, расписание")
+    Container(OpsInventory, "InventoryItem","Aggregate", "Инвентарь: тип, количество, местоположение")
+    Container(OpsSvc,       "Ops Service",  "Go\nPublished Language", "Публикует: clinic.activated · staff.assigned · staff.unassigned")
+}
+
+Container_Boundary(PharmaBC, "Фармацевтический контекст [Supporting Domain]") {
+    Container(PharmaMed,          "Medication",  "Aggregate", "Препарат: состав, дозировка, категория")
+    Container(PharmaPrescription, "Prescription","Aggregate", "Рецепт: препарат, пациент, врач, срок действия")
+    Container(PharmaSupply,       "Supply",      "Aggregate", "Поставка: партия, остатки на складе")
+    Container(PharmaSvc,          "Pharma Service","Go / Python\nPublished Language", "Публикует: prescription.issued · supply.received · stock.low")
+}
+
+Container_Boundary(AIBC, "ИИ-диагностика [Supporting Domain]") {
+    Container(AIDiagJob, "DiagnosticJob", "Aggregate", "Задание: снимок, модель, результат, уверенность")
+    Container(AISvc,     "AI Service",   "Python / ML\nPublished Language", "Публикует: diagnosis.completed · diagnosis.failed")
+}
+
+' ─── Event Bus ────────────────────────────────────────────────────────────────
+ContainerQueue(EventBus, "Event Bus", "Apache Kafka", "Все межконтекстные интеграции — только через события.\nПрямых вызовов между контекстами нет")
+
+' ─── Generic Subdomains ───────────────────────────────────────────────────────
+
+Container_Boundary(DataPlatformBC, "Платформа данных [Generic Subdomain]") {
+    Container(DataPlatform, "Data Platform", "Kafka Connect / Flink / Delta Lake", "[Conformist] Downstream потребитель всех доменов. Нет собственной бизнес-логики")
+}
+
+Container_Boundary(LegacyBC, "Легаси-зона [до 18 мес.]") {
+    Container(LegACL, "Anti-corruption Layer", "Apache Camel",         "Транслирует legacy-сообщения в доменные события. Изолирует домены от легаси-модели данных")
+    ContainerDb(LegDWH, "Legacy DWH",          "MS SQL Server 2008",   "Исторические данные — однократная миграция в Data Lakehouse")
+}
+
+' ─── Публикация событий ───────────────────────────────────────────────────────
+Rel_D(ClinSvc,   EventBus, "patient.registered\nappointment.completed\nstudy.completed",         "Publish")
+Rel_D(FinSvc,    EventBus, "payment.completed\npayment.failed\naccount.opened\ncredit.approved", "Publish")
+Rel_D(OpsSvc,    EventBus, "clinic.activated\nstaff.assigned\nstaff.unassigned",                 "Publish")
+Rel_D(PharmaSvc, EventBus, "prescription.issued\nsupply.received\nstock.low",                   "Publish")
+Rel_D(AISvc,     EventBus, "diagnosis.completed\ndiagnosis.failed",                             "Publish")
+
+' ─── Подписки Customer/Supplier ───────────────────────────────────────────────
+Rel_U(EventBus, FinSvc,    "[C/S] patient.registered → открыть счёт\n[C/S] appointment.completed → инициировать оплату",      "Subscribe")
+Rel_U(EventBus, ClinSvc,   "[C/S] payment.completed → разблокировать услугу\n[C/S] diagnosis.completed → прикрепить к карте", "Subscribe")
+Rel_U(EventBus, AISvc,     "[Conformist] study.completed → запустить диагностику",                                            "Subscribe")
+Rel_U(EventBus, PharmaSvc, "[C/S] appointment.completed → контекст рецепта",                                                  "Subscribe")
+Rel_U(EventBus, OpsSvc,    "[C/S] stock.low → инициировать закупку",                                                          "Subscribe")
+
+' ─── Data Platform — downstream conformist ───────────────────────────────────
+Rel_D(EventBus,  DataPlatform, "[Conformist] все события → Data Lakehouse", "Subscribe")
+Rel(LegDWH,      DataPlatform, "[ACL] однократная миграция", "JDBC / ETL")
+
+' ─── Legacy ACL ───────────────────────────────────────────────────────────────
+Rel_U(LegACL, EventBus, "[ACL] трансляция legacy-сообщений\nв доменные события", "Adapters")
+
+SHOW_LEGEND()
+@enduml
