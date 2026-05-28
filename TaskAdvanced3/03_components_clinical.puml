@@ -1,0 +1,59 @@
+@startuml C4_Component_Clinical
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_TOP_DOWN()
+
+title Будущее 2.0 — Медицинский домен\nC4 Component Diagram: Clinical Services API
+
+' ─── Внешние контейнеры ──────────────────────────────────────────────────────
+Container_Ext(APIGateway, "API Gateway", "Kong", "Маршрутизирует входящие запросы")
+ContainerDb_Ext(ClinicalDB, "Clinical DB", "PostgreSQL", "Операционные данные домена")
+Container_Ext(StudiesStorage, "Medical Studies Storage", "Object Storage / PACS", "Снимки и результаты исследований")
+ContainerDb_Ext(SchemaRegistry, "Schema Registry", "Confluent Schema Registry", "Контракты событий")
+ContainerQueue_Ext(EventBus, "Event Bus", "Apache Kafka", "Центральная событийная шина")
+Container_Ext(AIServices, "AI Services", "Python / ML", "Подписан на медицинские события")
+
+' ─── Декомпозиция контейнера Clinical Services API ───────────────────────────
+Container_Boundary(ClinicalAPI, "Clinical Services API") {
+
+    Component(Router, "API Router", "FastAPI Router", "Принимает входящие HTTP-запросы, маршрутизирует к сервисам, обрабатывает ошибки и авторизацию")
+
+    Component(PatientService, "Patient Service", "Python", "Регистрация пациентов, управление демографическими данными, поиск по реестру")
+
+    Component(AppointmentService, "Appointment Service", "Python", "Управление приёмами, расписание врачей, статусы визитов, напоминания")
+
+    Component(MedicalRecordsService, "Medical Records Service", "Python", "Ведение медицинских карт, диагнозы, назначения, история лечения")
+
+    Component(StudiesService, "Studies Service", "Python", "Направления на исследования, получение и привязка результатов из PACS")
+
+    Component(EventPublisher, "Event Publisher", "Python / aiokafka", "Валидирует события по схеме и публикует в топики Kafka. Единственная точка выхода событий из домена")
+}
+
+' ─── Связи: входящие запросы ─────────────────────────────────────────────────
+Rel(APIGateway, Router, "HTTP-запросы", "HTTPS")
+Rel(Router, PatientService, "Операции с пациентами")
+Rel(Router, AppointmentService, "Операции с приёмами")
+Rel(Router, MedicalRecordsService, "Операции с медкартами")
+Rel(Router, StudiesService, "Операции с исследованиями")
+
+' ─── Связи: домен → БД ───────────────────────────────────────────────────────
+Rel(PatientService, ClinicalDB, "Чтение / запись", "SQL")
+Rel(AppointmentService, ClinicalDB, "Чтение / запись", "SQL")
+Rel(MedicalRecordsService, ClinicalDB, "Чтение / запись", "SQL")
+Rel(StudiesService, ClinicalDB, "Метаданные исследований", "SQL")
+Rel(StudiesService, StudiesStorage, "Запрос снимков и результатов", "DICOM / HTTP")
+
+' ─── Связи: сервисы → EventPublisher ─────────────────────────────────────────
+Rel(PatientService, EventPublisher, "patient.registered\npatient.updated")
+Rel(AppointmentService, EventPublisher, "appointment.created\nappointment.cancelled")
+Rel(MedicalRecordsService, EventPublisher, "diagnosis.added\nprescription.issued")
+
+' ─── Связи: EventPublisher → шина ────────────────────────────────────────────
+Rel(EventPublisher, SchemaRegistry, "Валидация схемы перед публикацией")
+Rel(EventPublisher, EventBus, "Публикация событий", "Events")
+
+' ─── Связи: потребители событий ──────────────────────────────────────────────
+Rel(EventBus, AIServices, "diagnosis.added (обезличенные данные)", "Events")
+
+SHOW_LEGEND()
+@enduml

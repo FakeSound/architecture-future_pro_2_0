@@ -1,0 +1,81 @@
+@startuml C4_Component_DataPlatform
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_TOP_DOWN()
+
+title Будущее 2.0 — Платформа данных\nC4 Component Diagram: Data Platform
+
+' ─── Внешние источники ───────────────────────────────────────────────────────
+ContainerQueue_Ext(EventBus, "Event Bus", "Apache Kafka", "Источник событий всех доменов")
+ContainerDb_Ext(ClinicalDB, "Clinical DB", "PostgreSQL")
+ContainerDb_Ext(FintechDB, "Fintech DB", "PostgreSQL")
+ContainerDb_Ext(OpsDB, "Operations DB", "PostgreSQL")
+ContainerDb_Ext(LegacyDWH, "Legacy DWH", "MS SQL Server 2008")
+
+' ─── Внешние потребители ─────────────────────────────────────────────────────
+Container_Ext(DataPortal, "Портал самообслуживания", "Apache Superset + React")
+Container_Ext(BackOffice, "Back-office Service", "TBD")
+Container_Ext(IAM, "IAM", "Keycloak", "SSO и управление доступом. Источник identity claims для политик доступа к данным")
+
+' ─── Декомпозиция Data Platform ──────────────────────────────────────────────
+Container_Boundary(DataPlatform, "Платформа данных и аналитики") {
+
+    ' Слой приёма данных
+    Component(CDCConnector, "CDC Connector", "Debezium", "Захватывает изменения из операционных БД через transaction log без нагрузки на источник")
+    Component(EventConsumer, "Event Consumer", "Kafka Connect", "Потребляет события из всех топиков Kafka и передаёт в Raw Zone")
+    Component(LegacyLoader, "Legacy Loader", "Kafka Connect / ETL", "Однократная загрузка исторических данных из Legacy DWH в Raw Zone")
+
+    ' Слой обработки
+    Component(StreamProcessor, "Stream Processor", "Apache Flink", "Real-time трансформации: обогащение событий, агрегация, дедупликация, windowing")
+    Component(BatchProcessor, "Batch Processor", "Flink SQL / dbt", "Плановые трансформации: исторические срезы, SCD-логика, пересчёт агрегатов")
+
+    ' Слой хранения
+    ComponentDb(RawZone, "Raw Zone", "Delta Lake / Iceberg", "Сырые данные в исходном виде, разбитые по доменным namespace: raw/clinical/, raw/fintech/, raw/ops/. ACL на уровне хранилища: домен пишет только в свой prefix")
+    ComponentDb(CuratedZone, "Curated Zone", "Delta Lake / Iceberg", "Очищенные, обогащённые и согласованные данные. Разбиты по доменам: curated/clinical/, curated/fintech/, curated/ops/")
+
+    ' Data Products
+    Component(DataProductBuilder, "Data Product Builder", "dbt / Flink SQL", "Формирует доменные витрины из Curated Zone. Сервисный аккаунт домена имеет права записи только в свой раздел. Каждый продукт имеет владельца, схему и SLA")
+    ComponentDb(DataProducts, "Domain Data Products", "Iceberg tables", "Готовые витрины: медицинская, финансовая, операционная. Единица Data Mesh. Владелец домена управляет политиками доступа к своей витрине")
+
+    ' Каталог и доступ
+    Component(MetadataIndexer, "Metadata Indexer", "DataHub", "Индексирует схемы, data lineage, владельцев и SLA data products и слоёв озера")
+    Component(AccessPolicy, "Access Policy Engine", "OPA / DataHub", "Применяет row- и column-level политики на основе identity claims из Keycloak: кто и какие данные видит")
+    Component(QueryRouter, "Query Router", "Trino / API Gateway", "Валидирует JWT через Keycloak, маршрутизирует запросы к нужным data products, применяет политики доступа")
+}
+
+' ─── Связи: источники → приём ────────────────────────────────────────────────
+Rel(EventBus, EventConsumer, "Все доменные события", "Kafka Consumer")
+Rel(ClinicalDB, CDCConnector, "Transaction log (CDC)", "Debezium")
+Rel(FintechDB, CDCConnector, "Transaction log (CDC)", "Debezium")
+Rel(OpsDB, CDCConnector, "Transaction log (CDC)", "Debezium")
+Rel(LegacyDWH, LegacyLoader, "Исторические данные", "JDBC")
+
+' ─── Связи: приём → Raw Zone ─────────────────────────────────────────────────
+Rel(EventConsumer, RawZone, "Запись событий", "Delta / Iceberg API")
+Rel(CDCConnector, RawZone, "Запись CDC-изменений", "Delta / Iceberg API")
+Rel(LegacyLoader, RawZone, "Однократная загрузка", "Delta / Iceberg API")
+
+' ─── Связи: обработка ────────────────────────────────────────────────────────
+Rel(StreamProcessor, EventBus, "Потребляет события", "Kafka Consumer")
+Rel(StreamProcessor, CuratedZone, "Потоковые агрегаты и обогащённые данные", "Delta / Iceberg API")
+Rel(BatchProcessor, RawZone, "Читает сырые данные")
+Rel(BatchProcessor, CuratedZone, "Пишет исторические срезы", "Delta / Iceberg API")
+
+' ─── Связи: data products ────────────────────────────────────────────────────
+Rel(DataProductBuilder, CuratedZone, "Читает curated данные")
+Rel(DataProductBuilder, DataProducts, "Создаёт и обновляет витрины")
+Rel(MetadataIndexer, DataProducts, "Индексирует схемы и SLA")
+Rel(MetadataIndexer, CuratedZone, "Индексирует метаданные и lineage озера")
+Rel(AccessPolicy, DataProducts, "Применяет политики доступа")
+
+' ─── Связи: потребители ──────────────────────────────────────────────────────
+Rel(QueryRouter, DataProducts, "SQL-запросы к витринам")
+Rel(QueryRouter, AccessPolicy, "Проверяет права запроса")
+Rel(QueryRouter, IAM, "Валидирует JWT запроса", "OIDC")
+Rel(AccessPolicy, IAM, "Получает identity claims (роли, домен)", "OIDC / JWT")
+Rel(DataPortal, QueryRouter, "Запросы к данным", "HTTPS / SQL")
+Rel(DataPortal, MetadataIndexer, "Обнаружение data products", "API")
+Rel(BackOffice, QueryRouter, "Запросы к данным", "HTTPS / SQL")
+
+SHOW_LEGEND()
+@enduml
